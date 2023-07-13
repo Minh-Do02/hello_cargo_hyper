@@ -1,98 +1,68 @@
-#[macro_use] extern crate rocket;
 
-use diesel::prelude::*;
-use dotenvy::dotenv;
-use rocket::serde::json::Json;
-use hello_cargo::models::{InsertMsg, Msg, PostMsg};
-use hello_cargo::schema::msgs::dsl::msgs;
-use hello_cargo::establish_connection;
-use rocket::Build;
-use rocket::Rocket;
-use rocket::http::Status;
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Request, Response, Server};
+use openapiv3::*;
+use openapiv3_codegen::{Codegen, CodegenConfig};
+use std::fs::File;
+use std::io::Write;
+use std::sync::Arc;
 
-use rocket_okapi::{openapi, openapi_get_routes, rapidoc::*, swagger_ui::*};
-#[openapi(skip)]
-#[get("/")]
-fn index() -> &'static str {
-    "Hello, world!"
-}
+use openapiv3::{OpenAPI, ReferenceOr};
+use openapiv3_codegen::{Codegen, CodegenConfig, RustHyperCodegen};
+use std::fs;
 
-#[openapi]
-#[get("/ping")]
-fn ping() -> &'static str{
-    "pong"
-}
-#[launch]
-fn rocket() -> Rocket<Build> {
-    dotenv().ok();
-    rocket::build()
-        //.mount("/", routes![index, ping, get_msgs, create_msgs])
-        .mount("/", openapi_get_routes![index, ping, get_msgs, create_msgs])
-        .mount("/swagger-ui/",
-               make_swagger_ui(&SwaggerUIConfig {
-                   url: "../openapi.json".to_owned(),
-                   ..Default::default()
-               }),)
-}
-#[openapi(tag = "Msgs")]
-#[get("/msgs")]
-fn get_msgs() -> Result<Json<Msg>, Status>{
-    let connection: &mut PgConnection = &mut establish_connection();
-    msgs
-        .select(Msg::as_select())
-        .get_result(connection)
-        .map(Json)
-        .map_err(
-            |_| {
-                Status::NotFound
-            }
-        )
 
-}
-#[openapi(tag = "Msgs")]
-#[post("/msgs", format = "json", data = "<user_input>")]
-fn create_msgs(user_input: Json<PostMsg>) -> String {
-    let connection: &mut PgConnection = &mut establish_connection();
-    let new_msg = InsertMsg{
-        title: user_input.title.to_string(),
-        body: user_input.body.to_string(),
-    };
-    diesel::insert_into(msgs).values(&new_msg)
-        .returning(Msg::as_returning())
-        .get_result(connection).expect("Error post new msg");
-
-    format!("insert done")
-}
-
-#[cfg(test)]
-mod test{
-    use dotenvy::dotenv;
-    use super::rocket;
-    use rocket::local::blocking::Client;
-    use rocket::http::{ContentType, Status};
-
-    #[test]
-    fn test_ping() {
-        dotenv().ok();
-
-        let rocket = rocket::build().mount("/", routes![super::ping]);
-        let client = Client::tracked(rocket).expect("valid rocket instance");
-        let response = client.get(uri!(super::ping)).dispatch();
-        assert_eq!(response.status(), Status::Ok);
-        assert_eq!(response.into_string().unwrap(), "pong");
+async fn handle_request(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+    if req.uri().path() == "/" {
+        return Ok(Response::new(Body::from("checked")));
     }
 
-    #[test]
-    fn test_create_msgs() {
-        dotenv().ok();
-
-        let rocket = rocket::build().mount("/", routes![super::create_msgs]);
-        let client = Client::tracked(rocket).expect("valid rocket instance");
-        let response = client.post(uri!(super::create_msgs)).body(
-            r#"{"title": "hello", "body": "hello minh", "published": true}"#
-        ) .header(ContentType::JSON).dispatch();
-        assert_eq!(response.status(), Status::Ok);
-        assert_eq!(response.into_string().unwrap(), "insert done");
+    if req.uri().path() == "/ping" {
+        return Ok(Response::new(Body::from("pong")));
     }
+
+    Ok(Response::builder()
+        .status(404)
+        .body(Body::empty())
+        .unwrap())
 }
 
+#[tokio::main]
+async fn main() {
+    // Load the OpenAPI YAML file
+    let yaml = std::fs::read_to_string("/home/NMDo/Rust_projet/hello_cargo/API.yaml").expect("Failed to read OpenAPI file");
+
+    // Parse the OpenAPI YAML into OpenAPI specification
+    let spec: OpenAPI = serde_yaml::from_str(&yaml).expect("Failed to parse OpenAPI YAML");
+
+
+    let mut config = CodegenConfig::default();
+    config.base_path = Some("/".to_owned());
+    config.env_vars.insert("DATABASE_URL".to_owned(), "postgres://minh:minh123@localhost:5432/".to_owned());
+    let codegen = RustHyperCodegen::new(config);
+    let code = codegen.generate(&spec);
+
+    let rust_code = codegen.into_string().expect("Failed to generate Rust code");
+
+    // Write the generated Rust code to a file
+    let mut file = File::create("/home/NMDo/Rust_projet/hello_cargo/src/generated_code.rs").expect("Failed to create file");
+    file.write_all(rust_code.as_bytes()).expect("Failed to write Rust code to file");
+
+    // Create a Hyper server
+    let addr = ([127, 0, 0, 1], 8000).into();
+    let make_svc = make_service_fn(|_conn| {
+        let yaml = yaml.clone();
+        async {
+            Ok::<_, hyper::Error>(service_fn(move |req| {
+                let yaml = yaml.clone();
+                handle_request(req, yaml)
+            }))
+        }
+    });
+    let server = Server::bind(&addr).serve(make_svc);
+
+    // Run the server
+    if let Err(e) = server.await {
+        eprintln!("Server error: {}", e);
+    }
+}

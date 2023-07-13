@@ -1,0 +1,73 @@
+openapi: "3.0.0"
+info:
+  title: "hello_cargo"
+  version: "0.1.0"
+paths:
+  /ping:
+    get:
+      operationId: "ping"
+      responses:
+        '200':
+          description: ""
+          content:
+            text/plain:
+              schema: {}
+  /msgs:
+    get:
+      tags:
+        - "Msgs"
+      operationId: "get_msgs"
+      responses:
+        '200':
+          description: ""
+          content:
+            application/json:
+              schema: {}
+    post:
+      tags:
+        - "Msgs"
+      operationId: "create_msgs"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PostMsg"
+        required: true
+      responses:
+        '200':
+          description: ""
+          content:
+            text/plain:
+              schema: {}
+components:
+  schemas:
+    Msg:
+      type: "object"
+      required:
+        - "body"
+        - "id"
+        - "published"
+        - "title"
+      properties:
+        id:
+          type: "integer"
+          format: "int32"
+        title:
+          type: "string"
+        body:
+          type: "string"
+        published:
+          type: "boolean"
+    PostMsg:
+      type: "object"
+      required:
+        - "body"
+        - "published"
+        - "title"
+      properties:
+        title:
+          type: "string"
+        body:
+          type: "string"
+        published:
+          type: "boolean"
